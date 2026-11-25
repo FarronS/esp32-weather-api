@@ -12,6 +12,9 @@
 # Личные данные: WiFi SSID/пароль (шаблон — src/secrets.example.h)
 src/secrets.h
 
+# Личные настройки теста релея (сеть для ESP32-C3)
+test/relay_client/include/local_config.h
+
 # Прочее
 *.log
 .DS_Store

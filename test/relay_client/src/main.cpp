@@ -24,6 +24,15 @@
 
 #include "secrets.h"
 
+// Личные настройки именно для теста (не попадает в git).
+// Например, чтобы проверить другую сеть, не меняя основную прошивку:
+//     test/relay_client/include/local_config.h
+//         #undef WIFI_SSID
+//         #define WIFI_SSID "777"
+#if __has_include("local_config.h")
+#include "local_config.h"
+#endif
+
 #ifndef RELAY_HOST
 #define RELAY_HOST ""
 #endif
