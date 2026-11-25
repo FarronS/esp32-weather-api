@@ -1,0 +1,27 @@
+[Unit]
+Description=Weather relay for ESP32 (api.met.no -> compact text)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/weather-relay
+ExecStart=/usr/bin/python3 /opt/weather-relay/weather_relay.py
+Restart=always
+RestartSec=5
+User=weather
+Group=weather
+NoNewPrivileges=true
+PrivateTmp=true
+
+# Город и расписание (правьте под себя). Координаты по умолчанию — Тула.
+Environment=HOST=0.0.0.0
+Environment=PORT=8080
+Environment=LAT=54.1961
+Environment=LON=37.6182
+Environment=TZ_OFFSET=3
+Environment=REFRESH=600
+# Environment=TOKEN=ваш_токен
+
+[Install]
+WantedBy=multi-user.target

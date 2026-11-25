@@ -3,6 +3,7 @@
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include <time.h>
+#include <sys/time.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -19,9 +20,9 @@
 //
 //  Что делает плата:
 //    1) включает экран и кнопку PRG;
-//    2) подключается к WiFi (SSID/пароль ниже);
-//    3) раз в 15 минут забирает с api.met.no текущую погоду и неделю
-//       (оба экрана питаются одним ответом);
+//    2) подключается к WiFi (SSID/пароль в src/secrets.h);
+//    3) раз в 15 минут забирает погоду: сначала с релей-сервера (быстро),
+//       если он недоступен — напрямую с api.met.no (медленно, но работает);
 //    4) рисует всё на экране (весь рисунок — в src/display.cpp);
 //    5) стартовый экран — часы с датой, иконкой текущей погоды и температурой;
 //       нажатие PRG открывает второй экран — столбики погоды на неделю;
@@ -95,6 +96,43 @@ static const uint32_t ANIM_FRAME_MS = 180;
 
 // Таймаут HTTP-запроса, мс.
 static const uint16_t HTTP_TIMEOUT_MS = 20000;
+
+// ---------------------------------------------------------------------------
+//  2b. Релей-сервер (необязательно, но сильно ускоряет работу)
+// ---------------------------------------------------------------------------
+//  Проблема: api.met.no отдаёт ~500 КБ JSON по HTTPS. На мобильной точке
+//  доступа это 20-40 секунд, а иногда обрывается по таймауту.
+//
+//  Решение: маленький сервер (server/weather_relay.py) сам качает met.no,
+//  держит готовый результат и отдаёт плате ~150 байт обычным HTTP без TLS.
+//  Плата получает ответ за доли секунды.
+//
+//  Адрес сервера задаётся в src/secrets.h:
+//      #define RELAY_HOST "203.0.113.10"
+//      #define RELAY_PORT 8080
+//      #define RELAY_PATH "/weather"
+//      #define RELAY_TOKEN ""        // если на сервере включён TOKEN
+//
+//  Если RELAY_HOST пустой — релей выключен и плата ходит прямо в met.no.
+//  Если сервер не ответил за 6 секунд — тоже идём напрямую в met.no.
+#ifndef RELAY_HOST
+#define RELAY_HOST ""
+#endif
+#ifndef RELAY_PORT
+#define RELAY_PORT 8080
+#endif
+#ifndef RELAY_PATH
+#define RELAY_PATH "/weather"
+#endif
+#ifndef RELAY_TOKEN
+#define RELAY_TOKEN ""
+#endif
+
+// Таймаут релея: он рядом и должен отвечать быстро, ждать дольше нет смысла.
+static const uint16_t RELAY_TIMEOUT_MS = 6000;
+
+// Данные старше этого возраста считаем негодными (сервер давно не обновлялся).
+static const long RELAY_MAX_AGE_SEC = 6L * 3600L;
 
 // ---------------------------------------------------------------------------
 //  3. Разобранные данные текущей погоды
@@ -330,9 +368,167 @@ struct MetnoData {
     Week week;
 };
 
+// ---------------------------------------------------------------------------
+//  6a. Релей-сервер: быстрый путь получения погоды
+// ---------------------------------------------------------------------------
+//  Сервер отдаёт готовый текст (см. server/weather_relay.py):
+//
+//      ts 1763900000
+//      age 42
+//      now +0 partlycloudy_day
+//      week 25:+2 26:+4 27:+8 28:+6 29:+5 30:+1 01:+1
+//      (в конце каждой строки — '\n')
+//
+//  ts  — время сервера (unix UTC): если часы платы не выставлены, ставим по нему;
+//  age — сколько секунд назад сервер обновлял данные с met.no;
+//  now — текущая температура и код погоды;
+//  week — число месяца : максимум температуры за день.
+static bool relayConfigured() {
+    return RELAY_HOST[0] != '\0';
+}
+
+// Значение строки, начинающейся с key: "age 42" -> "42".
+static String relayLine(const String& body, const char* key) {
+    String prefix = String(key) + " ";
+    int p = body.indexOf(prefix);
+    if (p < 0) return "";
+
+    int start = p + prefix.length();
+    int end = body.indexOf('\n', start);
+    if (end < 0) end = body.length();
+
+    String value = body.substring(start, end);
+    value.trim();
+    return value;
+}
+
+// Один GET к релею. Это обычный HTTP (без TLS) — именно поэтому быстро.
+static bool relayRequest(String& payload) {
+    WiFiClient client;
+    HTTPClient http;
+
+    http.setTimeout(RELAY_TIMEOUT_MS);
+    http.setUserAgent("heltec-v4-weather/1.0");
+
+    String path = RELAY_PATH;
+    if (RELAY_TOKEN[0] != '\0') path += String("?k=") + RELAY_TOKEN;
+
+    if (!http.begin(client, RELAY_HOST, RELAY_PORT, path)) {
+        Serial.println("[релей] не удалось начать запрос");
+        return false;
+    }
+
+    int code = http.GET();
+    if (code != 200) {
+        if (code > 0) Serial.printf("[релей] код %d\n", code);
+        else          Serial.printf("[релей] %s\n", http.errorToString(code).c_str());
+        http.end();
+        return false;
+    }
+
+    payload = http.getString();
+    http.end();
+
+    return payload.length() > 0;
+}
+
+// Если часы платы ещё не выставлены (или сильно врут) — берём время сервера.
+static void applyServerTime(const String& body) {
+    String value = relayLine(body, "ts");
+    if (!value.length()) return;
+
+    time_t unixNow = (time_t)strtoul(value.c_str(), nullptr, 10);
+    if (unixNow < 1700000000L) return;            // явно не время
+
+    time_t current = time(nullptr);
+    bool bad = (current < 1700000000L);
+    if (!bad) {
+        long diff = (long)current - (long)unixNow;
+        if (diff < 0) diff = -diff;
+        bad = (diff > 300);                        // больше 5 минут расхождения
+    }
+
+    if (bad) {
+        struct timeval tv;
+        tv.tv_sec  = unixNow;
+        tv.tv_usec = 0;
+        settimeofday(&tv, nullptr);
+        Serial.printf("[время] выставлено по серверу: %ld\n", (long)unixNow);
+    }
+}
+
+// Разобрать ответ релея. true — данные годятся для показа.
+static bool parseRelay(const String& body, MetnoData& d) {
+    int ageSec = atoi(relayLine(body, "age").c_str());
+    if (ageSec > RELAY_MAX_AGE_SEC) {
+        Serial.printf("[релей] данные устарели: %d с\n", ageSec);
+        return false;
+    }
+
+    // ---- Текущая погода: "now +0 partlycloudy_day" ----------------------
+    String nowLine = relayLine(body, "now");
+    int sp = nowLine.indexOf(' ');
+    if (sp < 0) {
+        Serial.println("[релей] нет строки now");
+        return false;
+    }
+
+    int temp = atoi(nowLine.substring(0, sp).c_str());
+    String code = nowLine.substring(sp + 1);
+    code.trim();
+
+    char tempText[8];
+    snprintf(tempText, sizeof(tempText), "%+d", temp);
+
+    d.now.temp = tempText;
+    d.now.cond = conditionRu(code);
+    d.now.ok   = true;
+
+    // ---- Неделя: "week 25:+2 26:+4 ..." --------------------------------
+    String weekLine = relayLine(body, "week");
+    int pos = 0;
+    int idx = 0;
+
+    while (pos < (int)weekLine.length() && idx < 7) {
+        int sp2 = weekLine.indexOf(' ', pos);
+        String token = (sp2 < 0) ? weekLine.substring(pos)
+                                 : weekLine.substring(pos, sp2);
+
+        int colon = token.indexOf(':');
+        if (colon > 0) {
+            d.week.day[idx].label = token.substring(0, colon);
+            d.week.day[idx].tmax  = atoi(token.substring(colon + 1).c_str());
+            d.week.day[idx].ok    = true;
+            idx++;
+        }
+
+        if (sp2 < 0) break;
+        pos = sp2 + 1;
+    }
+
+    d.week.ok = (idx > 0);
+
+    Serial.printf("[релей] %s, %s (%s), дней: %d, возраст: %d с\n",
+                  d.now.temp.c_str(), d.now.cond.c_str(), code.c_str(), idx, ageSec);
+
+    return true;
+}
+
 static MetnoData fetchMetno() {
     MetnoData d;
 
+    // ---- Быстрый путь: свой релей --------------------------------------
+    if (relayConfigured()) {
+        String body;
+        if (relayRequest(body)) {
+            applyServerTime(body);
+            if (parseRelay(body, d)) return d;
+        } else {
+            Serial.println("[релей] недоступен — иду напрямую в met.no");
+        }
+    }
+
+    // ---- Медленный путь: прямой запрос к met.no ------------------------
     String payload;
     if (!metnoRequest(payload)) return d;
 
