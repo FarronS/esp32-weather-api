@@ -68,6 +68,7 @@ heltec_v4_blank/
 │   ├── README.md           развёртывание на VPS, systemd, Docker
 │   ├── weather-relay.service  готовый systemd-юнит
 │   └── Dockerfile          контейнер
+├── test/relay_client/      тест релея на ESP32-C3 (без экрана, замер времени)
 ├── backup/                 черновик OpenWeatherMap (не компилируется)
 └── .gitignore
 ```
@@ -168,6 +169,20 @@ curl http://localhost:8080/weather      # ts / age / now / week
 
 Если релей не ответил за 6 секунд, плата автоматически идёт напрямую в
 met.no — то есть работает как раньше, просто медленнее.
+
+### Тест релея без экрана (ESP32-C3 Super Mini)
+
+В `test/relay_client/` — отдельный маленький проект: ESP32-C3 подключается
+к WiFi, запрашивает релей, печатает ответ в Serial и замеряет время. Один раз
+в начале он сравнивает релей с прямым запросом в met.no и пишет, во сколько
+раз релей быстрее.
+
+```bash
+pio run -d test/relay_client -t upload
+pio device monitor -d test/relay_client -b 115200
+```
+
+Адрес сервера берётся из того же `src/secrets.h`, что и у основной прошивки.
 
 ## Что на экране
 
