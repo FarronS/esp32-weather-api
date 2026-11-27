@@ -20,6 +20,7 @@ Environment=PORT=8080
 Environment=LAT=54.1961
 Environment=LON=37.6182
 Environment=TZ_OFFSET=3
+Environment=CITY=Тула
 Environment=REFRESH=600
 # Environment=TOKEN=ваш_токен
 

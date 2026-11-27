@@ -8,6 +8,7 @@ ENV HOST=0.0.0.0 \
     LAT=54.1961 \
     LON=37.6182 \
     TZ_OFFSET=3 \
+    CITY=Тула \
     REFRESH=600
 
 EXPOSE 8080
