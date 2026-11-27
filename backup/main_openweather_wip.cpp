@@ -1,9 +1,3 @@
-// ЧЕРНОВИК ПОЛЬЗОВАТЕЛЯ, сохранён автоматически перед восстановлением проекта.
-// Исходный файл: src/main.cpp (версия от 2026-11-10 15:20:43).
-// В этом виде НЕ компилируется: строка 12 обрывается, cityName/ap не объявлены,
-// а U8g2/ArduinoJson/SSD1306Wire не подключены в platformio.ini.
-//
-// --- исходное содержимое ---
 #include <Arduino.h>
 #include <Wire.h>
 #include <U8g2lib.h>
@@ -13,7 +7,6 @@
 
 const char* ssid     = "raspi";
 const char* password = "87654321";
-
 
 const String serverPath = "http://openweathermap.org" + cityName + "&appid=" + ap
 

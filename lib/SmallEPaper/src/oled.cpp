@@ -8,27 +8,16 @@
 
 #include "oled_font.h"
 
-// ===========================================================================
-//  Реализация драйвера. Логика из oled.c (blink-main), но на Arduino Wire:
-//  вместо esp_lcd команды SSD1306 отправляются напрямую.
-//
-//  Формат фреймбуфера совпадает с «страничной» памятью SSD1306:
-//    8 страниц по 128 байт, байт = вертикальные 8 пикселей,
-//    младший бит = верхний пиксель страницы.
-//  Поэтому oled_update() просто пишет по 128 байт в каждую страницу.
-// ===========================================================================
-
-#define OLED_PAGES (OLED_H / 8)   // 8 страниц
-#define OLED_CHUNK 64             // сколько байт шлём за одну транзакцию
+#define OLED_PAGES (OLED_H / 8)
+#define OLED_CHUNK 64
 
 uint8_t oled_fb[OLED_W * OLED_H / 8];
 
 static bool s_ok = false;
 
-// --- низкий уровень: команды и данные ---
 static void send_cmds(const uint8_t *cmds, size_t n) {
     Wire.beginTransmission(OLED_ADDR);
-    Wire.write((uint8_t)0x00);      // 0x00 = дальше идут команды
+    Wire.write((uint8_t)0x00);
     Wire.write(cmds, (uint8_t)n);
     Wire.endTransmission();
 }
@@ -38,14 +27,13 @@ static void send_cmd(uint8_t c) {
 }
 
 static void send_page(uint8_t page, const uint8_t *data, size_t n) {
-    // адресация: номер страницы + колонка 0
     uint8_t addr[3] = { (uint8_t)(0xB0 | (page & 0x07)), 0x00, 0x10 };
     send_cmds(addr, 3);
 
     for (size_t off = 0; off < n; off += OLED_CHUNK) {
         size_t chunk = (n - off < OLED_CHUNK) ? (n - off) : OLED_CHUNK;
         Wire.beginTransmission(OLED_ADDR);
-        Wire.write((uint8_t)0x40);  // 0x40 = дальше идут данные
+        Wire.write((uint8_t)0x40);
         Wire.write(data + off, (uint8_t)chunk);
         Wire.endTransmission();
     }
@@ -66,11 +54,10 @@ static void hw_reset() {
 #endif
 }
 
-// --- питание и инициализация ---
 void oled_power_on() {
 #ifdef OLED_VEXT
     pinMode(OLED_VEXT, OUTPUT);
-    digitalWrite(OLED_VEXT, LOW);   // на платах Heltec LOW = включить питание
+    digitalWrite(OLED_VEXT, LOW);
     delay(100);
 #endif
 }
@@ -91,23 +78,23 @@ bool oled_init() {
     }
 
     static const uint8_t init_seq[] = {
-        0xAE,             // display off
-        0xD5, 0x80,       // clock divide
-        0xA8, 0x3F,       // multiplex = 64
-        0xD3, 0x00,       // display offset
-        0x40,             // start line 0
-        0x8D, 0x14,       // charge pump on
-        0x20, 0x00,       // horizontal addressing
-        0xA1,             // segment remap (зеркало по X)
-        0xC8,             // COM scan dec (зеркало по Y)
-        0xDA, 0x12,       // COM pins
-        0x81, 0xCF,       // contrast
-        0xD9, 0xF1,       // pre-charge
-        0xDB, 0x40,       // VCOMH
-        0xA4,             // output follows RAM
-        0xA6,             // normal (не инверсия)
-        0x2E,             // scroll off
-        0xAF              // display on
+        0xAE,
+        0xD5, 0x80,
+        0xA8, 0x3F,
+        0xD3, 0x00,
+        0x40,
+        0x8D, 0x14,
+        0x20, 0x00,
+        0xA1,
+        0xC8,
+        0xDA, 0x12,
+        0x81, 0xCF,
+        0xD9, 0xF1,
+        0xDB, 0x40,
+        0xA4,
+        0xA6,
+        0x2E,
+        0xAF
     };
     send_cmds(init_seq, sizeof(init_seq));
 
@@ -118,7 +105,6 @@ bool oled_init() {
     return true;
 }
 
-// --- отправка кадра ---
 void oled_update() {
     if (!s_ok) return;
     for (uint8_t page = 0; page < OLED_PAGES; page++) {
@@ -140,7 +126,6 @@ void oled_fill(uint8_t value) {
     oled_update();
 }
 
-// --- рисование ---
 void oled_set_pixel(int x, int y, bool on) {
     if (x < 0 || x >= OLED_W || y < 0 || y >= OLED_H) return;
     int idx = (y / 8) * OLED_W + x;
@@ -153,16 +138,14 @@ bool oled_get_pixel(int x, int y) {
     return (oled_fb[(y / 8) * OLED_W + x] >> (y % 8)) & 0x01;
 }
 
-// --- UTF-8 ---
 static size_t utf8_seq_len(uint8_t c) {
     if (c < 0x80) return 1;
     if ((c >> 5) == 0x06) return 2;
     if ((c >> 4) == 0x0E) return 3;
     if ((c >> 3) == 0x1E) return 4;
-    return 1;                      // битый байт — считаем одним символом
+    return 1;
 }
 
-// Прочитать один символ UTF-8 и сдвинуть указатель.
 static uint32_t utf8_decode(const char *&s) {
     uint8_t c = (uint8_t)*s;
     if (c == 0) return 0;
@@ -173,7 +156,7 @@ static uint32_t utf8_decode(const char *&s) {
     uint32_t cp = c & (0xFFu >> (n + 1));
     for (size_t i = 1; i < n; i++) {
         uint8_t cc = (uint8_t)s[i];
-        if ((cc & 0xC0) != 0x80) {  // строка кончилась или битый UTF-8
+        if ((cc & 0xC0) != 0x80) {
             s++;
             return 0x20;
         }
@@ -183,7 +166,6 @@ static uint32_t utf8_decode(const char *&s) {
     return cp;
 }
 
-// Нарисовать один глиф из таблицы шрифта с масштабом.
 static void draw_glyph(int x, int y, const uint8_t *g, int scale) {
     if (scale < 1) scale = 1;
     for (int row = 0; row < 8; row++) {
@@ -215,7 +197,7 @@ void oled_draw_char(int x, int y, char c) {
 void oled_draw_string(int x, int y, const char *str) {
     while (str && *str) {
         oled_draw_char(x, y, *str);
-        x += 8;                 // ширина символа
+        x += 8;
         str++;
     }
 }
@@ -265,7 +247,6 @@ void oled_printf(int x, int y, const char *fmt, ...) {
     oled_draw_utf8(x, y, buf);
 }
 
-// --- фигуры ---
 void oled_draw_line(int x0, int y0, int x1, int y1) {
     int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
     int dy = -abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
@@ -322,7 +303,6 @@ void oled_fill_circle(int cx, int cy, int r) {
     }
 }
 
-// --- настройки панели ---
 void oled_invert(bool invert) {
     if (!s_ok) return;
     send_cmd(invert ? 0xA7 : 0xA6);
@@ -339,7 +319,6 @@ void oled_display(bool on) {
     send_cmd(on ? 0xAF : 0xAE);
 }
 
-// --- кнопка ---
 void button_init(int pin) {
     pinMode(pin, INPUT_PULLUP);
 }
@@ -347,7 +326,7 @@ void button_init(int pin) {
 bool button_clicked(int pin) {
     static int prev[40];
     static bool init_done = false;
-    if (!init_done) {                     // первое чтение — запомнить состояние
+    if (!init_done) {
         for (int i = 0; i < 40; i++) prev[i] = -1;
         init_done = true;
     }
@@ -355,11 +334,11 @@ bool button_clicked(int pin) {
     if (prev[pin] < 0) prev[pin] = digitalRead(pin);
 
     int cur = digitalRead(pin);
-    bool clicked = (prev[pin] == HIGH && cur == LOW);  // фронт нажатия
+    bool clicked = (prev[pin] == HIGH && cur == LOW);
     prev[pin] = cur;
     return clicked;
 }
 
 bool button_pressed(int pin) {
-    return digitalRead(pin) == LOW;        // 0 = нажата
+    return digitalRead(pin) == LOW;
 }

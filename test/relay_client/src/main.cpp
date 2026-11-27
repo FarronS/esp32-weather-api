@@ -1,20 +1,3 @@
-// ===========================================================================
-//  ТЕСТ РЕЛЕЯ НА ESP32-C3 SUPER MINI
-//
-//  Что делает:
-//    1) подключается к WiFi (SSID/пароль из src/secrets.h);
-//    2) раз в 30 секунд запрашивает релей-сервер и печатает ответ;
-//    3) замеряет время каждого запроса;
-//    4) один раз в начале сравнивает релей с прямым запросом в api.met.no
-//       (релей ~150 байт по HTTP против ~500 КБ по HTTPS).
-//
-//  Прошивка:
-//      pio run -d test/relay_client -t upload
-//      pio device monitor -d test/relay_client -b 115200
-//
-//  Если RELAY_HOST в src/secrets.h пустой — тест честно об этом скажет
-//  и покажет только прямой запрос в met.no.
-// ===========================================================================
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -22,13 +5,13 @@
 #include <WiFiClientSecure.h>
 #include <time.h>
 
+#if __has_include("secrets.h")
 #include "secrets.h"
+#else
+#define WIFI_SSID ""
+#define WIFI_PASSWORD ""
+#endif
 
-// Личные настройки именно для теста (не попадает в git).
-// Например, чтобы проверить другую сеть, не меняя основную прошивку:
-//     test/relay_client/include/local_config.h
-//         #undef WIFI_SSID
-//         #define WIFI_SSID "777"
 #if __has_include("local_config.h")
 #include "local_config.h"
 #endif
@@ -51,12 +34,9 @@ static const char* METNO_URL =
     "?lat=54.1961&lon=37.6182";
 
 static const uint32_t WIFI_TIMEOUT_MS = 20000;
-static const uint32_t PERIOD_MS       = 30000;   // как часто дёргать релей
+static const uint32_t PERIOD_MS       = 30000;
 static const uint16_t RELAY_TIMEOUT_MS = 6000;
 
-// ---------------------------------------------------------------------------
-//  Мелочи
-// ---------------------------------------------------------------------------
 static const char* wifiStatusName(wl_status_t s) {
     switch (s) {
         case WL_IDLE_STATUS:     return "idle";
@@ -104,7 +84,6 @@ static bool connectWiFi() {
     return true;
 }
 
-// Значение строки ответа: "age 42" -> "42".
 static String lineOf(const String& body, const char* key) {
     String prefix = String(key) + " ";
     int p = body.indexOf(prefix);
@@ -119,9 +98,6 @@ static String lineOf(const String& body, const char* key) {
     return value;
 }
 
-// ---------------------------------------------------------------------------
-//  Запрос к релею с замером времени
-// ---------------------------------------------------------------------------
 static bool requestRelay(String& payload, uint32_t& elapsedMs, int& httpCode) {
     WiFiClient client;
     HTTPClient http;
@@ -156,9 +132,6 @@ static bool requestRelay(String& payload, uint32_t& elapsedMs, int& httpCode) {
     return true;
 }
 
-// ---------------------------------------------------------------------------
-//  Прямой запрос в met.no с замером времени (для сравнения)
-// ---------------------------------------------------------------------------
 static bool requestMetnoDirect(uint32_t& elapsedMs, int& httpCode, int& bytes) {
     WiFiClientSecure client;
     client.setInsecure();
@@ -190,9 +163,6 @@ static bool requestMetnoDirect(uint32_t& elapsedMs, int& httpCode, int& bytes) {
     return true;
 }
 
-// ---------------------------------------------------------------------------
-//  Печать одного ответа релея
-// ---------------------------------------------------------------------------
 static void printRelayPayload(const String& body, uint32_t elapsedMs) {
     Serial.printf("[релей] ответ за %lu мс, %u байт\n",
                   (unsigned long)elapsedMs, (unsigned)body.length());
@@ -203,7 +173,7 @@ static void printRelayPayload(const String& body, uint32_t elapsedMs) {
     }
     if (body.length() && body[body.length() - 1] != '\n') Serial.println();
 
-    String now = lineOf(body, "now");       // "+0 partlycloudy_day"
+    String now = lineOf(body, "now");
     String week = lineOf(body, "week");
     String age = lineOf(body, "age");
 
@@ -216,9 +186,6 @@ static void printRelayPayload(const String& body, uint32_t elapsedMs) {
     }
 }
 
-// ---------------------------------------------------------------------------
-//  Сравнение: релей против прямого met.no
-// ---------------------------------------------------------------------------
 static void compareOnce() {
     Serial.println();
     Serial.println("=== Сравнение: релей против прямого met.no ===");
@@ -254,12 +221,9 @@ static void compareOnce() {
     Serial.println();
 }
 
-// ---------------------------------------------------------------------------
-//  setup / loop
-// ---------------------------------------------------------------------------
 void setup() {
     Serial.begin(115200);
-    delay(2000);                     // USB-CDC на C3 поднимается не сразу
+    delay(2000);
 
     Serial.println();
     Serial.println("=== Тест релея погоды на ESP32-C3 ===");
@@ -272,7 +236,6 @@ void setup() {
         return;
     }
 
-    // Время нужно только для логов; часы C3 не показывают.
     configTime(3 * 3600, 0, "pool.ntp.org", "time.google.com");
 
     compareOnce();

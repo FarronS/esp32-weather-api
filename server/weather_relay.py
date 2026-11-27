@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Погодный релей для ESP32 (Heltec WiFi LoRa 32 V4).
 
@@ -53,16 +52,13 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-# --------------------------------------------------------------------------
-#  Настройки
-# --------------------------------------------------------------------------
 HOST        = os.environ.get("HOST", "0.0.0.0")
 PORT        = int(os.environ.get("PORT", "8080"))
-LAT         = os.environ.get("LAT", "54.1961")     # Тула
+LAT         = os.environ.get("LAT", "54.1961")
 LON         = os.environ.get("LON", "37.6182")
-TZ_OFFSET   = int(os.environ.get("TZ_OFFSET", "3"))  # Москва = UTC+3
+TZ_OFFSET   = int(os.environ.get("TZ_OFFSET", "3"))
 CITY        = os.environ.get("CITY", "Тула")
-REFRESH     = int(os.environ.get("REFRESH", "600"))  # 10 минут
+REFRESH     = int(os.environ.get("REFRESH", "600"))
 TOKEN       = os.environ.get("TOKEN", "").strip()
 USER_AGENT  = os.environ.get(
     "USER_AGENT",
@@ -74,16 +70,9 @@ METNO_URL = os.environ.get("METNO_URL") or (
     f"?lat={LAT}&lon={LON}"
 )
 
-# Данные старше этого возраста считаем бесполезными: плата тогда пойдёт
-# напрямую в met.no.
 MAX_AGE = 6 * 3600
 
 
-# --------------------------------------------------------------------------
-#  Мини-сайт для телефона
-# --------------------------------------------------------------------------
-#  Одна страница без зависимостей: сама опрашивает /weather.json раз в 10 с
-#  и показывает ровно то, что видит плата — текущую погоду, часы и неделю.
 PAGE_HTML = r"""<!doctype html>
 <html lang="ru">
 <head>
@@ -249,17 +238,14 @@ setInterval(tick, 1000);
 </body>
 </html>"""
 
-# --------------------------------------------------------------------------
-#  Состояние: то, что отдаём плате
-# --------------------------------------------------------------------------
 _state_lock = threading.Lock()
 _state = {
-    "text":  "",      # готовый компактный ответ для платы
-    "json":  {},      # те же данные для /weather.json
-    "ok":    False,   # была ли хоть одна успешная загрузка
-    "error": "",      # текст последней ошибки
-    "updated": 0.0,   # когда данные реально получены с met.no (unix)
-    "fetches": 0,     # сколько раз успешно сходили в met.no
+    "text":  "",
+    "json":  {},
+    "ok":    False,
+    "error": "",
+    "updated": 0.0,
+    "fetches": 0,
 }
 
 
@@ -278,9 +264,6 @@ def log_payload(label: str, text: str) -> None:
         log(f"{label} {line}")
 
 
-# --------------------------------------------------------------------------
-#  Загрузка и разбор ответа met.no
-# --------------------------------------------------------------------------
 def fetch_upstream() -> dict:
     req = urllib.request.Request(
         METNO_URL,
@@ -296,7 +279,6 @@ def build_payload(raw: dict) -> tuple:
     if not series:
         raise ValueError("в ответе met.no пустой timeseries")
 
-    # ---- Текущая погода: первый срез -----------------------------------
     first = series[0]["data"]
     temp_now = first["instant"]["details"]["air_temperature"]
     summary = (
@@ -307,10 +289,9 @@ def build_payload(raw: dict) -> tuple:
     )
     code_now = summary.get("summary", {}).get("symbol_code", "")
 
-    # ---- Неделя: максимум температуры на каждый местный день -----------
     tz = timezone(timedelta(hours=TZ_OFFSET))
-    order = []          # даты в порядке появления
-    tmax = {}           # дата -> максимум
+    order = []
+    tmax = {}
 
     for entry in series:
         stamp = entry["time"].replace("Z", "+00:00")
@@ -377,21 +358,18 @@ def updater() -> None:
 
             log(f"[met.no] обновлено: {fmt_temp(now_json['temp'])} "
                 f"{now_json['code']}, дней: {len(days)} (всего загрузок: {fetches})")
-            log_payload("[данные]", text)   # полный ответ, который получит плата
+            log_payload("[данные]", text)
             backoff = 30
             time.sleep(REFRESH)
 
-        except Exception as exc:                      # noqa: BLE001
+        except Exception as exc:
             with _state_lock:
                 _state["error"] = f"{type(exc).__name__}: {exc}"
             log(f"[met.no] ошибка: {_state['error']} — повтор через {backoff} с")
             time.sleep(backoff)
-            backoff = min(backoff * 2, 300)           # 30, 60, 120, 240, 300...
+            backoff = min(backoff * 2, 300)
 
 
-# --------------------------------------------------------------------------
-#  HTTP-сервер
-# --------------------------------------------------------------------------
 def render_text() -> str:
     """Актуальный ответ для платы: с пересчитанным возрастом данных."""
     with _state_lock:
@@ -422,7 +400,7 @@ def render_json() -> dict:
     return {
         "ok": ok,
         "error": error,
-        "server_time": int(time.time()),   # для часов на мини-сайте
+        "server_time": int(time.time()),
         "tz_offset": TZ_OFFSET,
         "city": CITY,
         "data": data if ok else None,
@@ -432,10 +410,9 @@ def render_json() -> dict:
 class Handler(BaseHTTPRequestHandler):
     server_version = "weather-relay/1.0"
 
-    def log_message(self, fmt, *args):            # тише в логах
+    def log_message(self, fmt, *args):
         log(f"{self.client_address[0]} {fmt % args}")
 
-    # --- проверка токена (если задан) ---
     def _authorized(self, query) -> bool:
         if not TOKEN:
             return True
@@ -470,7 +447,6 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/weather":
             text = render_text()
             if not text:
-                # Данных ещё нет — плата должна уйти напрямую в met.no.
                 self._send(b"", "text/plain; charset=utf-8", 503)
                 return
             log_payload(f"[{self.client_address[0]}] ответ плате", text)
@@ -506,9 +482,6 @@ class Handler(BaseHTTPRequestHandler):
         self._send(b"not found\n", "text/plain; charset=utf-8", 404)
 
 
-# --------------------------------------------------------------------------
-#  Старт
-# --------------------------------------------------------------------------
 if __name__ == "__main__":
     log(f"релей запускается: http://{HOST}:{PORT}/weather")
     log(f"город: {LAT}, {LON} (UTC+{TZ_OFFSET}); обновление раз в {REFRESH} с")
