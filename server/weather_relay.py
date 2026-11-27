@@ -98,6 +98,12 @@ def fmt_temp(value: float) -> str:
     return f"{int(round(value)):+d}"
 
 
+def log_payload(label: str, text: str) -> None:
+    """Показать в логе все строки данных — для проверки глазами."""
+    for line in text.rstrip("\n").split("\n"):
+        log(f"{label} {line}")
+
+
 # --------------------------------------------------------------------------
 #  Загрузка и разбор ответа met.no
 # --------------------------------------------------------------------------
@@ -193,9 +199,11 @@ def updater() -> None:
 
             with _state_lock:
                 fetches = _state["fetches"]
+                text = _state["text"]
 
             log(f"[met.no] обновлено: {fmt_temp(now_json['temp'])} "
                 f"{now_json['code']}, дней: {len(days)} (всего загрузок: {fetches})")
+            log_payload("[данные]", text)   # полный ответ, который получит плата
             backoff = 30
             time.sleep(REFRESH)
 
@@ -288,6 +296,7 @@ class Handler(BaseHTTPRequestHandler):
                 # Данных ещё нет — плата должна уйти напрямую в met.no.
                 self._send(b"", "text/plain; charset=utf-8", 503)
                 return
+            log_payload(f"[{self.client_address[0]}] ответ плате", text)
             self._send(text.encode("utf-8"), "text/plain; charset=utf-8")
             return
 
